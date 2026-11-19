@@ -1,0 +1,65 @@
+# DOCKER COMPOSE CONFIGURATION
+# Production Deployment for Smart Highway Cleaning WFM & Dynamic QR Attendance System
+
+services:
+  # Primary Relational Database (PostgreSQL 16)
+  postgres:
+    image: postgres:16-alpine
+    container_name: highway-wfm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: highway_wfm
+      POSTGRES_USER: highway_admin
+      POSTGRES_PASSWORD: production_strong_password_2026
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U highway_admin -d highway_wfm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # In-Memory Cache & Rate Limiting (Redis 7)
+  redis:
+    image: redis:7-alpine
+    container_name: highway-wfm-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # Full-Stack Application Service (Express + Socket.IO + Built React Client)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: highway-wfm-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      HOST: 0.0.0.0
+      DATABASE_URL: postgresql://highway_admin:production_strong_password_2026@postgres:5432/highway_wfm?schema=public
+      DB_TYPE: postgresql
+      JWT_SECRET: super-secure-highway-wfm-jwt-secret-key-2026
+      JWT_EXPIRES_IN: 8h
+      REFRESH_SECRET: super-secure-highway-refresh-secret-2026
+      REFRESH_EXPIRES_IN: 7d
+      QR_HMAC_SECRET: qr-dynamic-token-hmac-sha256-signing-secret-999
+      QR_VALIDITY_SECONDS: 45
+      ENFORCE_GEOFENCE: "false"
+    volumes:
+      - upload_data:/app/uploads
+
+volumes:
+  postgres_data:
+  redis_data:
+  upload_data:

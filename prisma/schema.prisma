@@ -1,0 +1,379 @@
+// Prisma Schema for Smart Highway Cleaning Workforce Management & QR Attendance System
+// Normalized relational database schema supporting all 21 core entities
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         String    // SUPER_ADMIN, OPERATIONS_ADMIN, SUPERVISOR, HUB_OPERATOR, FIELD_WORKER
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  employee     Employee?
+  supervisor   Supervisor?
+  hubOperator  Hub?      @relation("HubOperator")
+  auditLogs    AuditLog[]
+  notifications Notification[]
+
+  @@index([role])
+  @@index([email])
+}
+
+model Employee {
+  id              String             @id @default(uuid())
+  userId          String             @unique
+  employeeCode    String             @unique // e.g. "EMP-1001"
+  phone           String?
+  skills          String?            // comma-separated or JSON
+  status          String             @default("ACTIVE") // ACTIVE, ON_LEAVE, INACTIVE
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignments     WorkerAssignment[]
+  cleaningTasks   CleaningTask[]
+  attendanceRecords AttendanceRecord[]
+  attendanceEvents  AttendanceEvent[]
+  incidents       Incident[]
+
+  @@index([employeeCode])
+  @@index([status])
+}
+
+model Supervisor {
+  id            String             @id @default(uuid())
+  userId        String             @unique
+  supervisorCode String            @unique // e.g. "SUP-2001"
+  phone         String?
+  department    String             @default("Highway Operations")
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignments   WorkerAssignment[]
+  lanes         Lane[]
+  verifications TaskVerification[]
+
+  @@index([supervisorCode])
+}
+
+model HighwaySection {
+  id          String   @id @default(uuid())
+  sectionCode String   @unique // e.g. "SEC-NH48-01"
+  name        String   // e.g. "NH-48 Corridor Km 12-25"
+  startKm     Float
+  endKm       Float
+  region      String   @default("North Sector")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  lanes       Lane[]
+  hubs        Hub[]
+
+  @@index([sectionCode])
+}
+
+model Lane {
+  id               String             @id @default(uuid())
+  laneCode         String             // L01, L02, L03, L04
+  name             String             // "Highway Left", "Highway Right", "Service Road Left", "Service Road Right"
+  category         String             // HIGHWAY_LEFT, HIGHWAY_RIGHT, SERVICE_ROAD_LEFT, SERVICE_ROAD_RIGHT
+  highwaySectionId String
+  supervisorId     String?
+  direction        String             @default("Northbound") // Northbound, Southbound, Bidirectional
+  status           String             @default("IDLE") // IDLE, IN_PROGRESS, COMPLETED, MAINTENANCE
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  highwaySection   HighwaySection     @relation(fields: [highwaySectionId], references: [id], onDelete: Cascade)
+  supervisor       Supervisor?        @relation(fields: [supervisorId], references: [id], onDelete: SetNull)
+  assignments      WorkerAssignment[]
+  cleaningTasks    CleaningTask[]
+
+  @@unique([highwaySectionId, laneCode])
+  @@index([category])
+  @@index([status])
+}
+
+model Hub {
+  id                String             @id @default(uuid())
+  hubCode           String             @unique // e.g. "HUB-01"
+  name              String             // e.g. "North Highway Toll Hub"
+  physicalAddress   String
+  latitude          Float
+  longitude         Float
+  geofenceRadiusM   Float              @default(500.0) // 500 meters
+  isActive          Boolean            @default(true)
+  highwaySectionId  String?
+  operatorUserId    String?            @unique
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  highwaySection    HighwaySection?    @relation(fields: [highwaySectionId], references: [id], onDelete: SetNull)
+  operator          User?              @relation("HubOperator", fields: [operatorUserId], references: [id], onDelete: SetNull)
+  qrTokens          HubQrToken[]
+  attendanceRecords AttendanceRecord[]
+  attendanceEvents  AttendanceEvent[]
+
+  @@index([hubCode])
+  @@index([isActive])
+}
+
+model HubQrToken {
+  id          String   @id @default(uuid())
+  hubId       String
+  token       String   @unique
+  nonce       String   @unique
+  signature   String
+  expiresAt   DateTime
+  isConsumed  Boolean  @default(false)
+  consumedAt  DateTime?
+  consumedBy  String?  // Worker employee ID
+  createdAt   DateTime @default(now())
+
+  hub         Hub      @relation(fields: [hubId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([nonce])
+  @@index([hubId, expiresAt])
+}
+
+model Shift {
+  id          String             @id @default(uuid())
+  name        String             // "Morning Shift", "Afternoon Shift", "Night Patrol"
+  code        String             @unique // SHIFT-M, SHIFT-A, SHIFT-N
+  startTime   String             // "06:00"
+  endTime     String             // "14:00"
+  isActive    Boolean            @default(true)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  assignments WorkerAssignment[]
+  cleaningTasks CleaningTask[]
+
+  @@index([code])
+}
+
+model WorkerAssignment {
+  id           String       @id @default(uuid())
+  employeeId   String
+  laneId       String
+  shiftId      String
+  supervisorId String?
+  date         String       // "YYYY-MM-DD"
+  status       String       @default("ASSIGNED") // ASSIGNED, ACTIVE, COMPLETED, CANCELLED
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  lane         Lane         @relation(fields: [laneId], references: [id], onDelete: Cascade)
+  shift        Shift        @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  supervisor   Supervisor?  @relation(fields: [supervisorId], references: [id], onDelete: SetNull)
+  tasks        CleaningTask[]
+
+  @@unique([employeeId, date, shiftId])
+  @@index([date])
+  @@index([status])
+}
+
+model CleaningTask {
+  id             String             @id @default(uuid())
+  assignmentId   String
+  employeeId     String
+  laneId         String
+  shiftId        String
+  title          String             // e.g. "Lane Left Litter & Debris Sweep KM 12-16"
+  description    String?
+  targetKmStart  Float
+  targetKmEnd    Float
+  status         String             @default("PENDING") // PENDING, IN_PROGRESS, COMPLETED, VERIFIED, REJECTED
+  startTime      DateTime?
+  completionTime DateTime?
+  remarks        String?
+  hasObstruction Boolean            @default(false)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  assignment     WorkerAssignment   @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  employee       Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  lane           Lane               @relation(fields: [laneId], references: [id], onDelete: Cascade)
+  shift          Shift              @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  evidence       TaskEvidence[]
+  verifications  TaskVerification[]
+  attendanceRecords AttendanceRecord[]
+  incidents      Incident[]
+
+  @@index([status])
+  @@index([employeeId, status])
+}
+
+model TaskEvidence {
+  id          String       @id @default(uuid())
+  taskId      String
+  type        String       // BEFORE_PHOTO, AFTER_PHOTO, OBSTRUCTION_PHOTO
+  imageUrl    String
+  thumbnailUrl String?
+  latitude    Float?
+  longitude   Float?
+  caption     String?
+  capturedAt  DateTime     @default(now())
+
+  task        CleaningTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, type])
+}
+
+model TaskVerification {
+  id           String       @id @default(uuid())
+  taskId       String
+  supervisorId String
+  status       String       // APPROVED, REJECTED, EXCEPTION_APPROVED
+  reviewNotes  String?
+  rejectionReason String?
+  isException  Boolean      @default(false)
+  exceptionReason String?
+  reviewedAt   DateTime     @default(now())
+
+  task         CleaningTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  supervisor   Supervisor   @relation(fields: [supervisorId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([supervisorId])
+}
+
+model AttendanceRecord {
+  id                  String             @id @default(uuid())
+  employeeId          String
+  hubId               String
+  taskId              String?
+  date                String             // "YYYY-MM-DD"
+  status              String             // ATTENDANCE_VERIFIED, ATTENDANCE_REJECTED, PENDING_SUPERVISOR_APPROVAL
+  verifiedAt          DateTime?
+  rejectionReason     String?
+  hubDistanceMeters   Float?
+  qrTokenUsed         String?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  employee            Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  hub                 Hub                @relation(fields: [hubId], references: [id], onDelete: Cascade)
+  task                CleaningTask?      @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  events              AttendanceEvent[]
+  locationVerification LocationVerification?
+
+  @@unique([employeeId, date, hubId, status])
+  @@index([date])
+  @@index([status])
+  @@index([employeeId, date])
+}
+
+model AttendanceEvent {
+  id                  String            @id @default(uuid())
+  attendanceRecordId  String?
+  employeeId          String
+  hubId               String?
+  eventType           String            // WORK_STARTED, WORK_COMPLETED, QR_SCANNED, ATTENDANCE_CONFIRMED, ATTENDANCE_REJECTED, EXCEPTION_FILED
+  payload             String?           // JSON details
+  ipAddress           String?
+  userAgent           String?
+  timestamp           DateTime          @default(now())
+
+  attendanceRecord    AttendanceRecord? @relation(fields: [attendanceRecordId], references: [id], onDelete: SetNull)
+  employee            Employee          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  hub                 Hub?              @relation(fields: [hubId], references: [id], onDelete: SetNull)
+
+  @@index([eventType])
+  @@index([timestamp])
+  @@index([employeeId])
+}
+
+model LocationVerification {
+  id                  String            @id @default(uuid())
+  attendanceRecordId  String            @unique
+  workerLatitude      Float
+  workerLongitude     Float
+  hubLatitude         Float
+  hubLongitude        Float
+  calculatedDistanceM Float
+  allowedRadiusM      Float
+  isWithinRadius      Boolean
+  accuracyMeters      Float?
+  verifiedAt          DateTime          @default(now())
+
+  attendanceRecord    AttendanceRecord  @relation(fields: [attendanceRecordId], references: [id], onDelete: Cascade)
+
+  @@index([isWithinRadius])
+}
+
+model Incident {
+  id          String        @id @default(uuid())
+  taskId      String?
+  employeeId  String
+  type        String        // ROAD_OBSTRUCTION, ACCIDENT, HAZARD, VEHICLE_BREAKDOWN, OTHER
+  title       String
+  description String
+  severity    String        @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  latitude    Float?
+  longitude   Float?
+  imageUrl    String?
+  isResolved  Boolean       @default(false)
+  resolvedAt  DateTime?
+  createdAt   DateTime      @default(now())
+
+  task        CleaningTask? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  employee    Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([severity])
+  @@index([isResolved])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  title     String
+  message   String
+  type      String   @default("INFO") // INFO, WARNING, SUCCESS, ALERT
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  action      String   // LOGIN, QR_GENERATED, QR_VERIFIED, TASK_APPROVED, EXCEPTION_OVERRIDE, GEOFENCE_BREACH
+  entityType  String   // ATTENDANCE, TASK, USER, HUB
+  entityId    String?
+  details     String?  // JSON stringified metadata
+  ipAddress   String?
+  timestamp   DateTime @default(now())
+
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([action])
+  @@index([timestamp])
+  @@index([entityType, entityId])
+}
+
+model SystemSetting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+}
